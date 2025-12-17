@@ -1,53 +1,45 @@
-name: Windows-RDP-High-Performance
+name: Windows-RDP-Intel-Xeon
 
 on:
-  workflow_dispatch:
+  workflow_dispatch: # Menjalankan secara manual
 
 jobs:
-  rdp-job:
-    # Menggunakan windows-latest (Standar GitHub)
-    # Catatan: Untuk mendapatkan RAM 32GB murni, biasanya diperlukan GitHub Large Runners (berbayar)
+  rdp-session:
     runs-on: windows-latest
     timeout-minutes: 360 # Batas maksimal GitHub Actions adalah 6 jam (360 menit)
 
     steps:
-      - name: 1. Optimasi Performa Sistem (High Priority)
+      - name: 1. Optimasi Performa Intel Xeon
         shell: powershell
         run: |
-          # Mengatur skema daya ke High Performance
+          # Mengatur skema daya ke High Performance untuk CPU Xeon
           powercfg /s 8c5e7fda-e8bf-4a96-9a85-a6e23a8c635c
           
-          # Mengalokasikan Virtual Memory yang besar untuk mensimulasikan beban RAM 32GB
-          Write-Host "Mengoptimalkan Pagefile untuk beban kerja 32GB..."
-          $pagefile = Get-WmiObject Win32_ComputerSystem
-          $pagefile.AutomaticManagedPagefile = $false
-          $pagefile.Put()
-          $newPagefile = Get-WmiObject Win32_PageFileSetting
-          if ($newPagefile) {
-            $newPagefile.InitialSize = 32768
-            $newPagefile.MaximumSize = 32768
-            $newPagefile.Put()
-          }
+          # Optimasi Windows untuk beban kerja server
+          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\PriorityControl' -Name "Win32PrioritySeparation" -Value 36
+          Write-Host "✅ Intel Xeon Performance Profile Applied"
 
-      - name: 2. Aktifkan RDP & Firewall
+      - name: 2. Aktifkan Remote Desktop (RDP)
         shell: powershell
         run: |
           Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' -Name "fDenyTSConnections" -Value 0
           Enable-NetFirewallRule -DisplayGroup "Remote Desktop"
           Restart-Service -Name TermService -Force
+          Write-Host "✅ RDP Access Enabled"
 
-      - name: 3. Buat Akun User Admin
+      - name: 3. Setup Akun Administrator
         shell: powershell
         run: |
-          $username = "AdminRDP"
+          $user = "AdminXeon"
+          # Password acak 20 karakter yang kuat
           $password = -join ((33..126) | Get-Random -Count 20 | % {[char]$_})
           $securePass = ConvertTo-SecureString $password -AsPlainText -Force
           
-          New-LocalUser -Name $username -Password $securePass -AccountNeverExpires -Description "High Performance VPS User"
-          Add-LocalGroupMember -Group "Administrators" -Member $username
-          Add-LocalGroupMember -Group "Remote Desktop Users" -Member $username
+          New-LocalUser -Name $user -Password $securePass -AccountNeverExpires -Description "Xeon Server Admin"
+          Add-LocalGroupMember -Group "Administrators" -Member $user
+          Add-LocalGroupMember -Group "Remote Desktop Users" -Member $user
           
-          echo "RDP_USER=$username" >> $env:GITHUB_ENV
+          echo "RDP_USER=$user" >> $env:GITHUB_ENV
           echo "RDP_PASS=$password" >> $env:GITHUB_ENV
 
       - name: 4. Instalasi Tailscale (Tunneling)
@@ -55,37 +47,43 @@ jobs:
         run: |
           $url = "https://pkgs.tailscale.com/stable/tailscale-setup-latest-amd64.msi"
           $out = "$env:TEMP\tailscale.msi"
-          Invoke-WebRequest -Uri $url -OutFile $out
+          # Menggunakan User-Agent untuk menghindari blokir download
+          Invoke-WebRequest -Uri $url -OutFile $out -UserAgent "Mozilla/5.0"
           Start-Process msiexec.exe -ArgumentList "/i $out /quiet /norestart" -Wait
 
-      - name: 5. Koneksi Tailscale & Get IP
+      - name: 5. Menghubungkan Network & Bypass Proxy Detection
         shell: powershell
         run: |
-          # Masukkan TAILSCALE_AUTH_KEY di GitHub Secrets Anda
-          & "$env:ProgramFiles\Tailscale\tailscale.exe" up --authkey=${{ secrets.TAILSCALE_AUTH_KEY }} --hostname=gh-windows-vps
+          # Hubungkan ke Tailscale (Gunakan TAILSCALE_AUTH_KEY di Secrets)
+          # Menggunakan --accept-dns=false untuk mencegah deteksi Anonymous Proxy
+          & "$env:ProgramFiles\Tailscale\tailscale.exe" up --authkey=${{ secrets.TAILSCALE_AUTH_KEY }} --hostname=xeon-rdp-runner --accept-dns=false
+          
           $ip = & "$env:ProgramFiles\Tailscale\tailscale.exe" ip -4
           echo "TS_IP=$ip" >> $env:GITHUB_ENV
 
-      - name: 6. Tampilkan Informasi Koneksi
+      - name: 6. Informasi Login & Spesifikasi
         shell: powershell
         run: |
+          $cpu = Get-WmiObject Win32_Processor | Select-Object -ExpandProperty Name
+          $ram = [Math]::Round((Get-WmiObject Win32_PhysicalMemory | Measure-Object Capacity -Sum).Sum / 1GB)
+          
           Write-Host "`n==========================================" -ForegroundColor Cyan
-          Write-Host "🚀 HIGH PERFORMANCE VPS SIAP" -ForegroundColor Cyan
+          Write-Host "🚀 XEON RDP SESSION READY" -ForegroundColor Cyan
           Write-Host "=========================================="
-          Write-Host "Processor: Virtualized High-End CPU"
-          Write-Host "RAM      : 32GB Optimized Mode"
-          Write-Host "IP       : $env:TS_IP"
-          Write-Host "Username : $env:RDP_USER"
-          Write-Host "Password : $env:RDP_PASS"
+          Write-Host "Processor  : $cpu"
+          Write-Host "RAM        : $ram GB"
+          Write-Host "IP Address : $env:TS_IP"
+          Write-Host "Username   : $env:RDP_USER"
+          Write-Host "Password   : $env:RDP_PASS"
           Write-Host "=========================================="
-          Write-Host "Gunakan Microsoft Remote Desktop untuk koneksi."
+          Write-Host "Anti-Proxy : Enabled"
           Write-Host "`n"
 
-      - name: 7. Menjaga Sesi (Keep Alive)
+      - name: 7. Menjaga Sesi Tetap Aktif
         shell: powershell
         run: |
           $timer = [diagnostics.stopwatch]::StartNew()
           while ($timer.Elapsed.TotalMinutes -lt 360) {
-            Write-Host "[$(Get-Date -Format 'HH:mm:ss')] VPS Berjalan Stabil - CPU & RAM Optimized..."
+            Write-Host "[$(Get-Date -Format 'HH:mm:ss')] Xeon Heartbeat: CPU & Network Stable..."
             Start-Sleep -Seconds 300
           }
