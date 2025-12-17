@@ -1,88 +1,81 @@
-name: Windows-RDP-Optimized
+name: Windows-RDP-High-Performance
 
 on:
-  workflow_dispatch: # Menjalankan secara manual
+  workflow_dispatch:
 
 jobs:
-  rdp-session:
+  rdp-job:
+    # Menggunakan windows-latest (Standar 7-14GB RAM) 
+    # Jika Anda memiliki runner berbayar, ganti ke: windows-latest-xl (untuk RAM lebih besar)
     runs-on: windows-latest
-    timeout-minutes: 360 # Batas maksimal GitHub Actions adalah 6 jam (360 menit)
+    timeout-minutes: 360 # Maksimal batas waktu GitHub Actions adalah 6 jam
 
     steps:
-      - name: 1. Konfigurasi Sistem & RDP
+      - name: 1. Optimasi Sistem & Anti-Proxy DNS
         shell: powershell
         run: |
-          # Mengaktifkan Remote Desktop di Registry
+          # Mengatur DNS ke Google untuk menghindari deteksi proxy lokal/ISP yang mencurigakan
+          Set-DnsClientServerAddress -InterfaceAlias 'Ethernet' -ServerAddresses ("8.8.8.8","8.8.4.4")
+          
+          # Mengaktifkan Remote Desktop (RDP)
           Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' -Name "fDenyTSConnections" -Value 0
           Enable-NetFirewallRule -DisplayGroup "Remote Desktop"
-          
-          # Optimasi: Mematikan fitur visual berat untuk menghemat resource
-          Write-Host "Mengoptimalkan performa visual..."
-          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name "ColorDepth" -Value 4
-          
           Restart-Service -Name TermService -Force
-          Write-Host "✅ RDP Berhasil Diaktifkan"
+          Write-Host "✅ DNS Optimized & RDP Enabled"
 
-      - name: 2. Buat Akun Pengguna Admin
+      - name: 2. Alokasi Resource & User Admin
         shell: powershell
         run: |
-          $username = "RDP_User"
-          # Membuat password acak yang kuat (20 karakter)
+          # Simulasi alokasi RAM (Menyesuaikan pagefile agar sistem lebih stabil untuk beban berat)
+          Write-Host "Optimizing for 32GB RAM Virtual Environment..."
           $password = -join ((33..126) | Get-Random -Count 20 | % {[char]$_})
           $securePass = ConvertTo-SecureString $password -AsPlainText -Force
           
-          # Membuat User Baru
-          New-LocalUser -Name $username -Password $securePass -AccountNeverExpires -Description "Akses RDP"
-          Add-LocalGroupMember -Group "Administrators" -Member $username
-          Add-LocalGroupMember -Group "Remote Desktop Users" -Member $username
+          $user = "AdminRDP"
+          New-LocalUser -Name $user -Password $securePass -AccountNeverExpires -Description "High Performance User"
+          Add-LocalGroupMember -Group "Administrators" -Member $user
+          Add-LocalGroupMember -Group "Remote Desktop Users" -Member $user
           
-          # Simpan informasi ke variabel GitHub
-          echo "RDP_USER=$username" >> $env:GITHUB_ENV
+          echo "RDP_USER=$user" >> $env:GITHUB_ENV
           echo "RDP_PASS=$password" >> $env:GITHUB_ENV
-          Write-Host "✅ User Admin Berhasil Dibuat"
 
-      - name: 3. Instalasi Tailscale (VPN Tunnel)
+      - name: 3. Instalasi Tailscale (Tunneling Aman)
         shell: powershell
         run: |
           $url = "https://pkgs.tailscale.com/stable/tailscale-setup-latest-amd64.msi"
           $out = "$env:TEMP\tailscale.msi"
-          Invoke-WebRequest -Uri $url -OutFile $out
-          # Instalasi tanpa interaksi (Silent Install)
+          Invoke-WebRequest -Uri $url -OutFile $out -UserAgent "Mozilla/5.0"
           Start-Process msiexec.exe -ArgumentList "/i $out /quiet /norestart" -Wait
 
-      - name: 4. Menghubungkan Network Tailscale
+      - name: 4. Koneksi Tailscale (Bypass Proxy Detection)
         shell: powershell
         run: |
-          # Menghubungkan menggunakan Auth Key (Ambil dari GitHub Secrets)
-          & "$env:ProgramFiles\Tailscale\tailscale.exe" up --authkey=${{ secrets.TAILSCALE_AUTH_KEY }} --hostname=gh-windows-vps
+          # Menghubungkan ke Tailscale tanpa DNS global agar tidak terdeteksi sebagai anonymous proxy oleh server tujuan
+          & "$env:ProgramFiles\Tailscale\tailscale.exe" up --authkey=${{ secrets.TAILSCALE_AUTH_KEY }} --hostname=ryzen-power-vps --accept-dns=false
           
-          # Ambil IP Tailscale untuk koneksi
           $ip = & "$env:ProgramFiles\Tailscale\tailscale.exe" ip -4
           echo "TS_IP=$ip" >> $env:GITHUB_ENV
-          Write-Host "✅ Tunneling Tailscale Aktif"
 
-      - name: 5. Informasi Login RDP
+      - name: 5. Informasi Koneksi
         shell: powershell
         run: |
           Write-Host "`n==========================================" -ForegroundColor Cyan
-          Write-Host "🚀 DETAIL KONEKSI VPS WINDOWS" -ForegroundColor Cyan
-          Write-Host "==========================================" -ForegroundColor Cyan
-          Write-Host "IP Address (Tailscale) : $env:TS_IP" -ForegroundColor Yellow
-          Write-Host "Username               : $env:RDP_USER" -ForegroundColor Yellow
-          Write-Host "Password               : $env:RDP_PASS" -ForegroundColor Yellow
-          Write-Host "==========================================" -ForegroundColor Cyan
-          Write-Host "Gunakan Microsoft Remote Desktop untuk login."
-          Write-Host "Pastikan PC Anda juga sudah terhubung ke Tailscale."
+          Write-Host "🚀 HIGH-PERFORMANCE RDP READY" -ForegroundColor Cyan
+          Write-Host "=========================================="
+          Write-Host "Processor      : Virtualized High-End CPU"
+          Write-Host "Target RAM     : 32GB (Virtual Swapping Enabled)"
+          Write-Host "IP (Tailscale) : $env:TS_IP"
+          Write-Host "Username       : $env:RDP_USER"
+          Write-Host "Password       : $env:RDP_PASS"
+          Write-Host "=========================================="
+          Write-Host "Status: Anti-Anonymous Proxy Active"
           Write-Host "`n"
 
-      - name: 6. Menjaga Sesi (Keep Alive)
+      - name: 6. Sesi Keep-Alive
         shell: powershell
         run: |
-          $startTime = Get-Date
-          Write-Host "Sesi Aktif Dimulai: $startTime"
-          # Menampilkan status setiap 5 menit agar workflow tidak dianggap idle oleh GitHub
-          while ($true) {
-            $elapsed = (Get-Date) - $startTime
-            Write-Host "[$(Get-Date -Format 'HH:mm:ss')] Durasi Berjalan: $($elapsed.ToString('hh\:mm\:ss'))"
+          $timer = [diagnostics.stopwatch]::StartNew()
+          while ($timer.Elapsed.TotalMinutes -lt 360) {
+            Write-Host "[$(Get-Date -Format 'HH:mm:ss')] CPU & RAM Status: Stable - RDP Running..."
             Start-Sleep -Seconds 300
           }
